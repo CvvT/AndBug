@@ -67,7 +67,9 @@ def threads(ctxt, arg1 = None, arg2 = None):
     ctxt.sess.suspend()
 
     try:
-        threads = sorted(ctxt.sess.threads(name).items, key=threadId)
+        # I think there is no need for sort
+        # threads = sorted(ctxt.sess.threads(name).items, key=threadId)
+        threads = ctxt.sess.threads(name).items
 
         for t in threads:
             with andbug.screed.section(str(t)):

@@ -126,7 +126,8 @@ class Context(object):
             return False
 
         if not self.can_perform(act):
-            if ctxt.shell:
+            # change from 'ctxt.shell' to 'self.shell'
+            if self.shell:
                 perr('!! %s is not available in the shell.' % cmd)
             else:
                 perr('!! %s is only available in the shell.' % cmd)
@@ -149,6 +150,7 @@ class Context(object):
 
         if act.proc: self.connect()
         try:
+            # print type(act), act.aliases
             act(self, *args, **kwargs)
         except Exception as exc:
             dump_exc(exc)

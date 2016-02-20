@@ -16,6 +16,15 @@
 'this script executes command modules found in andbug.commands'
 import os, os.path, sys, traceback, atexit
 
+def cur_file_dir():
+    path = sys.path[0]
+    if os.path.isdir(path):
+        return path
+    elif os.path.isfile(path):
+        return os.path.dirname(path)
+
+sys.path.append(cur_file_dir()+"/lib")
+
 def panic(why, exit=True, exc=False):
     sys.stderr.write("!! %s\n" % (why,))
     sys.stderr.flush()

@@ -2,6 +2,11 @@
 AndBug -- A Scriptable Android Debugger
 =======================================
 
+Before All
+----------
+
+在Andbug的基础上，结合了其他人的扩展支持step命令，在修补了一个bug的同时，增加对任意行bytecode进行断点
+
 AndBug is a debugger targeting the Android platform's Dalvik virtual machine intended for reverse engineers and developers.  It uses the same interfaces as Android's Eclipse debugging plugin, the Java Debug Wire Protocol (JDWP) and Dalvik Debug Monitor (DDM) to permit users to hook Dalvik methods, examine process state, and even perform changes.
 
 Unlike Google's own Android Software Development Kit debugging tools, AndBug does not require or expect source code.  It does, however, require that you have some level of comfort with Python, as it uses a concept of scripted breakpoints, called "hooks", for most nontrivial tasks.  (If you just want to dump loaded classes, methods, or threads, there are example scripts for that.)

@@ -32,6 +32,8 @@ from Queue import Queue
 ##    http://docs.oracle.com/javase/6/docs/platform/jpda/jdwp/jdwp-protocol.html
 ##    
 
+g_jdwp_request_timeout = 5
+
 class RequestError(Exception):
     'raised when a request for more information from the process fails'
     def __init__(self, code):
@@ -238,6 +240,26 @@ class Thread(SessionElement):
         if code != 0:
             raise RequestError(code)
 
+    #add by sq.luo  
+    def singleStep(self, func = None, queue = None, stepdepth = 1):
+        suspendState = self.sess.suspendState
+        if suspendState.set:
+            self.sess.emap[suspendState.eid].clear()
+        conn = self.conn
+        buf = conn.buffer()
+        # 1:SINGLE_STEP, 1: SP_THREAD, 1: modifers 10: condition of Step 
+        # 1: Step size :Line 1: stepdepth: over
+
+        buf.pack('11i1tii', 1, 1, 1, 10, self.tid, 1, stepdepth) 
+        code, buf = conn.request(0x0f01, buf.data())
+        if code != 0:
+            raise RequestError(code)
+        eid = buf.unpackInt()
+        self.sess.suspendState.setBreakPoint(eid, stepdepth)
+        h = self.sess.hook(eid, func, queue, self)
+        self.resume();
+        return h
+
     def packTo(self, buf):
         buf.packObjectId(self.tid)
 
@@ -440,6 +462,12 @@ class Method(SessionElement):
     def __repr__(self):
         return '<method %s>' % self
 
+    # I change the index of lineTable from 'line' to 'index'
+    def add_line_table(self, index):
+        loc = self.sess.pool(Location, self.sess, self.tid, self.mid, index)
+        loc.line = -1
+        self.lineTable[index] = loc
+
     def load_line_table(self):
         sess = self.sess
         conn = sess.conn
@@ -464,9 +492,10 @@ class Method(SessionElement):
         self.lineTable = ll
         def line_loc():
             loc, line  = buf.unpack('8i')
+            index = loc     # add variable index instead of line
             loc = pool(Location, sess, tid, mid, loc)
             loc.line = line
-            ll[line] = loc
+            ll[index] = loc
 
         for i in range(0,ct):
             line_loc()
@@ -747,12 +776,48 @@ def unpack_event_location(sess, buf):
     loc = Location.unpackFrom(sess, buf)
     return rid, t, loc
 
+# Single Step
+register_unpack_impl(1, unpack_event_location)
 # Breakpoint
 register_unpack_impl(2, unpack_event_location)
 # MothodEntry
 register_unpack_impl(40, unpack_event_location)
 # MothodExit
 register_unpack_impl(41, unpack_event_location)
+
+#add by sq.luo  
+class SuspendState(object):
+    def __init__(self):
+        self.isSuspend = False
+        self.thread = None
+        self.location = None
+        self.set = False
+        self.eid = 0
+
+    def suspend(self, data):
+        self.isSuspend = True
+        if len(data) >= 2:
+            self.thread = data[0]
+            self.location = data[1]
+        
+    def resume(self, sess):
+        self.isSuspend = False
+        self.thread = None
+        self.location = None
+        if self.set:
+            sess.emap[self.eid].clear()
+            self.set = False
+
+    def getThread(self):
+        return self.thread
+    
+    def getLocation(self):
+        return self.location
+    
+    def setBreakPoint(self, eid, stepdepth):
+        self.set = True
+        self.eid = eid
+        self.stepdepth = stepdepth
 
 class Session(object):
     def __init__(self, conn):
@@ -761,12 +826,16 @@ class Session(object):
         self.emap = {}
         self.ectl = Lock()
         self.evtq = Queue()
+        self.suspendState = SuspendState()
         conn.hook(0x4064, self.evtq)
         self.ethd = threading.Thread(
             name='Session', target=self.run
         )
         self.ethd.daemon=1
         self.ethd.start()
+
+    def getSuspendState(self):
+        return self.suspendState
 
     def run(self):
         while True:
@@ -787,6 +856,7 @@ class Session(object):
             with self.ectl:
                 hook = self.emap.get(evt[0])
             if hook is not None:
+                self.suspendState.suspend(evt[1:])
                 hook.put(evt[1:])
                           
     def load_classes(self):
@@ -833,6 +903,7 @@ class Session(object):
             raise RequestError(code)
 
     def resume(self):
+        self.suspendState.resume(self)
         code, buf = self.conn.request(0x0109, '')
         if code != 0:
             raise RequestError(code)
@@ -865,6 +936,20 @@ class Session(object):
                 name = name if not re.match('^\d+$', name) else '<' + name + '>'
                 seq = (t for t in seq if name in t.name.split(' ',1))
         return andbug.data.view(seq)
+
+    def vmCapability(self):
+
+        code, buf = self.conn.request(0x010c, '', g_jdwp_request_timeout)        
+        codeNew, bufNew = self.conn.request(0x0111, '', g_jdwp_request_timeout)
+        
+        if code != 0:
+            raise RequestError(code)
+        elif codeNew != 0:
+            raise RequestError(codeNew)
+        
+        vmCapability = VmCapability(buf, bufNew)
+        
+        return  vmCapability
 
 rx_dalvik_tname = re.compile('^<[0-9]+> .*$')
 
@@ -1157,3 +1242,42 @@ def connect(pid, dev=None):
     conn = andbug.proto.connect(andbug.proto.forward(pid, dev))
     return andbug.vm.Session(conn)
 
+class VmCapability(Element):
+    def __init__(self, capabilityBuf, newCapabilityBuf): 
+        # reserved16 - reserved32        
+        self.vm_cap = {}
+        self.vm_cap["canWatchFieldModification"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canWatchFieldAccess"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canGetBytecodes"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canGetSyntheticAttribute"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canGetOwnedMonitorInfo"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canGetCurrentContendedMonitor"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canGetMonitorInfo"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canRedefineClasses"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canAddMethod"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canUnrestrictedlyRedefineClasses"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canPopFrames"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canUseInstanceFilters"] = newCapabilityBuf.unpackU8()
+        self.vm_cap["canGetSourceDebugExtension"] = newCapabilityBuf.unpackU8()        
+        self.vm_cap["canRequestVMDeathEvent"] = newCapabilityBuf.unpackU8()        
+        self.vm_cap["canSetDefaultStratum"] = newCapabilityBuf.unpackU8()        
+        
+    def __str__(self):
+        dataStr =   "canWatchFieldModification=" + str(self.canWatchFieldModification) + "\r\n"
+        dataStr +=   "canWatchFieldAccess=" + str(self.canWatchFieldAccess) + "\r\n"
+        dataStr +=   "canGetBytecodes=" + str(self.canGetBytecodes) + "\r\n"
+        dataStr +=   "canGetSyntheticAttribute=" + str(self.canGetSyntheticAttribute) + "\r\n"
+        dataStr +=   "canGetOwnedMonitorInfo=" + str(self.canGetOwnedMonitorInfo) + "\r\n"
+        dataStr +=   "canGetCurrentContendedMonitor=" + str(self.canGetCurrentContendedMonitor) + "\r\n"
+        dataStr +=   "canGetMonitorInfo=" + str(self.canGetMonitorInfo) + "\r\n"
+        dataStr +=   "canRedefineClasses=" + str(self.canRedefineClasses) + "\r\n"
+        dataStr +=   "canAddMethod=" + str(self.canAddMethod) + "\r\n"
+        dataStr +=   "canUnrestrictedlyRedefineClasses=" + str(self.canUnrestrictedlyRedefineClasses) + "\r\n"
+        dataStr +=   "canPopFrames=" + str(self.canPopFrames) + "\r\n"
+        dataStr +=   "canUseInstanceFilters=" + str(self.canUseInstanceFilters) + "\r\n"
+        dataStr +=   "canGetSourceDebugExtension=" + str(self.canGetSourceDebugExtension) + "\r\n"
+        dataStr +=   "canRequestVMDeathEvent=" + str(self.canRequestVMDeathEvent) + "\r\n"
+        dataStr +=   "canSetDefaultStratum=" + str(self.canSetDefaultStratum) + "\r\n"
+
+        
+        return dataStr

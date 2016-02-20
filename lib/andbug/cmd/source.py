@@ -21,8 +21,8 @@ def source(ctxt, srcdir):
     'adds a source directory for finding files' 
 
     if os.path.isdir(srcdir):
-        if os.path.isdir(os.path.join(srcdir, "smali")):
-            srcdir = os.path.join(srcdir, "smali")
+        # if os.path.isdir(os.path.join(srcdir, "smali")):
+            # srcdir = os.path.join(srcdir, "smali")
         andbug.source.add_srcdir(srcdir)
     else:
         print '!! directory not found:', repr(srcdir)

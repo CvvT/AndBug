@@ -52,6 +52,10 @@ def cmd_break_line(ctxt, cpath, mpath, line):
                 andbug.screed.item(str(sorted(l.keys())))
                 continue
             l = l.get(line, None)
+            if l is None:   # try to add this line to line table
+                l = m.lineTable
+                m.add_line_table(line)
+                l = l.get(line, None)
             if l is None:
                 andbug.screed.item("can't found line %i" % line)
                 continue
